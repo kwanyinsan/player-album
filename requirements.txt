@@ -1,0 +1,29 @@
+# Install CUDA-specific PyTorch first if this file is used on a GPU machine.
+# Example for CUDA 12.1:
+# python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+#
+# Install ffmpeg with conda before this file:
+# conda install -c conda-forge ffmpeg -y
+
+torch>=2.5.1
+torchvision>=0.20.1
+torchaudio>=2.5.1
+ultralytics>=8.3.0
+git+https://github.com/ultralytics/CLIP.git
+lap>=0.5.12
+opencv-python-headless>=4.8.0
+numpy>=1.26.0
+scikit-learn>=1.4.0
+scipy>=1.11.0
+Pillow>=10.0.0
+tqdm>=4.66.0
+
+# Torchreid support dependencies.
+# Install Torchreid itself as an environment-level upstream source checkout.
+# See README.md for the Windows-safe setup command.
+Cython>=0.29.36
+tensorboard>=2.15.0
+h5py>=3.10.0
+gdown>=5.0.0
+yacs>=0.1.8
+tabulate>=0.9.0

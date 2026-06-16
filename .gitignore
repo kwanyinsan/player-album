@@ -1,0 +1,79 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Python build artifacts
+build/
+dist/
+*.egg-info/
+
+# Environments
+.venv/
+venv/
+env/
+.env
+.env.*
+.conda/
+
+# IDE and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Input media
+videos/
+highlights/
+highlight/
+input/
+media/
+test/
+*.mp4
+*.mov
+*.avi
+*.mkv
+
+# Model weights and large local artifacts
+models/
+*.pt
+*.pth
+*.pth.tar
+*.onnx
+*.engine
+*.trt
+*.torchscript
+mobileclip2_b.ts
+
+# Generated runs and exports
+runs/
+outputs/
+output/
+results/
+players/
+review/
+rejected/
+global/
+logs.json
+local_tracks.json
+player_groups.json
+video_index.json
+similarity_matrix.csv
+local_track_embeddings.npy
+local_track_index.json
+gallery.html
+
+# Generated image crops
+*.jpg
+*.jpeg
+*.png
+*.webp
+
+# Keep project documentation
+!README.md
+!requirements.txt
+!docs/
+!docs/**
