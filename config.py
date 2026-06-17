@@ -124,7 +124,7 @@ class PipelineConfig:
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Build player-only People Albums from tracked pickleball highlight videos."
+        description="Build player and person albums from tracked highlight videos."
     )
 
     parser.add_argument("--input_dir", default="highlights", help="Folder of input videos.")
@@ -135,7 +135,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--imgsz", type=int, default=960, help="YOLOE inference image size.")
     parser.add_argument("--conf", type=float, default=0.40, help="Detection confidence threshold.")
     parser.add_argument("--iou", type=float, default=0.70, help="NMS IoU threshold.")
-    parser.add_argument("--device", default="0", help="Torch/Ultralytics device, for example 0 or cpu.")
+    parser.add_argument("--device", default="0", help="Torch and Ultralytics device, for example 0 or cpu.")
     parser.add_argument("--half", type=parse_bool, default=True, help="Use FP16 inference when supported.")
     parser.add_argument("--reid_model", default="osnet_ain_x1_0", help="Torchreid model name.")
     parser.add_argument("--reid_model_path", default=DEFAULT_REID_MODEL_PATH, help="Optional Torchreid checkpoint path.")
@@ -151,13 +151,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--identity_min_consistency", type=float, default=0.74, help="Minimum combined identity consistency before a cluster is marked weak.")
     parser.add_argument("--identity_min_color_consistency", type=float, default=0.35, help="Minimum color consistency before a cluster is marked outfit-diverse.")
     parser.add_argument("--identity_split_mean_threshold", type=float, default=0.78, help="Split a cluster when its combined identity mean falls below this value.")
-    parser.add_argument("--identity_split_color_threshold", type=float, default=0.52, help="Split a cluster when its outfit/color consistency falls below this value.")
+    parser.add_argument("--identity_split_color_threshold", type=float, default=0.52, help="Split a cluster when its outfit and color consistency falls below this value.")
     parser.add_argument("--identity_split_p10_threshold", type=float, default=0.62, help="Low-tail combined similarity threshold for identity splitting.")
     parser.add_argument("--identity_split_std_threshold", type=float, default=0.07, help="Combined similarity standard-deviation threshold for identity splitting.")
     parser.add_argument("--identity_split_large_min_similarity", type=float, default=0.58, help="Minimum pair similarity tolerated for large identity clusters.")
     parser.add_argument("--identity_album_min_consistency", type=float, default=0.70, help="Album scoring penalty threshold for identity consistency.")
     parser.add_argument("--identity_album_large_min_consistency", type=float, default=0.78, help="Album scoring penalty threshold for large identity clusters.")
-    parser.add_argument("--identity_album_min_color_consistency", type=float, default=0.50, help="Album scoring penalty threshold for outfit/color consistency.")
+    parser.add_argument("--identity_album_min_color_consistency", type=float, default=0.50, help="Album scoring penalty threshold for outfit and color consistency.")
     parser.add_argument("--save_debug_video", type=parse_bool, default=True, help="Render per-video tracking debug MP4.")
     parser.add_argument("--save_gallery", type=parse_bool, default=True, help="Render global verification gallery HTML.")
 
@@ -176,17 +176,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default="bbox",
         help="Use rectangular crops, masked crops, or save both.",
     )
-    parser.add_argument("--min_mask_area_ratio", type=float, default=0.02, help="Minimum mask area / bbox area.")
+    parser.add_argument("--min_mask_area_ratio", type=float, default=0.02, help="Minimum mask area divided by bbox area.")
     parser.add_argument("--min_person_shape_score", type=float, default=0.35, help="Minimum person-like crop shape score.")
     parser.add_argument("--max_edge_touch_ratio", type=float, default=0.75, help="Reject crops touching too many frame edges.")
     parser.add_argument("--active_player_filter", type=parse_bool, default=True, help="Enable simple active-track filter.")
     parser.add_argument("--min_movement_score", type=float, default=0.04, help="Minimum normalized movement score.")
     parser.add_argument("--min_track_duration_sec", type=float, default=0.8, help="Minimum visible track duration.")
-    parser.add_argument("--quality_filter_export", type=parse_bool, default=True, help="Split albums into accepted/review/rejected.")
-    parser.add_argument("--album_accept_threshold", type=float, default=0.78, help="Minimum album quality score for players/.")
-    parser.add_argument("--album_review_threshold", type=float, default=0.55, help="Minimum album quality score for review/.")
-    parser.add_argument("--export_review_rejected_folders", type=parse_bool, default=False, help="Copy review/rejected albums into output folders.")
-    parser.add_argument("--gallery_include_review_rejected", type=parse_bool, default=False, help="Show review/rejected groups in gallery.html.")
+    parser.add_argument("--quality_filter_export", type=parse_bool, default=True, help="Split albums into accepted, review, and rejected groups.")
+    parser.add_argument("--album_accept_threshold", type=float, default=0.78, help="Minimum album quality score for the players folder.")
+    parser.add_argument("--album_review_threshold", type=float, default=0.55, help="Minimum album quality score for review status.")
+    parser.add_argument("--export_review_rejected_folders", type=parse_bool, default=False, help="Copy review and rejected albums into output folders.")
+    parser.add_argument("--gallery_include_review_rejected", type=parse_bool, default=False, help="Show review and rejected groups in gallery.html.")
     return parser
 
 

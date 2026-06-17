@@ -1,8 +1,19 @@
 # Player Album
 
-Player Album is a player/person album generation pipeline for highlight videos. It uses YOLOE segmentation and Ultralytics tracking to create local player tracks, saves high-quality player crops, extracts Torchreid ReID embeddings, clusters matching identities across videos, and exports player album folders, JSON indexes, debug videos, and verification galleries.
+Player Album is a player and person album generation pipeline for highlight videos.
+It uses YOLOE segmentation and Ultralytics tracking to create local player tracks,
+saves high-quality player crops, extracts Torchreid ReID embeddings, clusters
+matching identities across videos, and exports player album folders, JSON indexes,
+debug videos, and verification galleries.
 
-Third-party credit: this project uses [Torchreid](https://github.com/KaiyangZhou/deep-person-reid) as an environment-level installed dependency for person ReID feature extraction, and uses OSNet/OSNet-AIN model checkpoints from the Torchreid ecosystem. Torchreid is MIT licensed. For research or academic use, credit the Torchreid project and the OSNet/OSNet-AIN papers listed by the upstream repository, including "Torchreid: A Library for Deep Learning Person Re-Identification in Pytorch", "Omni-Scale Feature Learning for Person Re-Identification", and "Learning Generalisable Omni-Scale Representations for Person Re-Identification".
+Third-party credit: this project uses [Torchreid](https://github.com/KaiyangZhou/deep-person-reid)
+as an environment-level installed dependency for person ReID feature extraction.
+It also uses OSNet and OSNet-AIN model checkpoints from the Torchreid ecosystem.
+Torchreid is MIT licensed. For research or academic use, credit the Torchreid
+project and the OSNet and OSNet-AIN papers listed by the upstream repository,
+including "Torchreid: A Library for Deep Learning Person Re-Identification in
+Pytorch", "Omni-Scale Feature Learning for Person Re-Identification", and
+"Learning Generalisable Omni-Scale Representations for Person Re-Identification".
 
 ## Pipeline
 
@@ -20,26 +31,11 @@ input highlight videos
 
 ## Scope
 
-This project is only for player/person album grouping across highlight videos.
-
-```text
-In scope:
-  YOLOE person/player segmentation
-  BoT-SORT or ByteTrack local tracking
-  best crop extraction
-  Torchreid ReID embedding extraction
-  global player clustering
-  player album export
-  verification gallery and debug videos
-
-Out of scope:
-  ball detection
-  sport-specific object detection
-  video auto-framing
-  16:9 or 9:16 cropped video generation
-  SAM3
-  court-line model training
-```
+This project processes a folder of highlight videos and groups repeated players
+or people into identity albums. It detects player candidates with YOLOE, tracks
+each local player within each video, extracts representative crops, computes ReID
+embeddings with Torchreid, clusters likely matching identities across videos, and
+exports albums plus verification artifacts.
 
 The current defaults are tuned for quality-first player album processing:
 
@@ -52,7 +48,6 @@ conf: 0.40
 device: 0
 half: true
 ReID model: osnet_ain_x1_0
-ReID checkpoint: models/osnet_ain_x1_0_msmt17_256x128_amsgrad_ep50_lr0.0015_coslr_b64_fb10_softmax_labsmth_flip_jitter.pth
 cluster method: agglomerative
 cluster distance threshold: 0.18
 debug video: true
@@ -61,79 +56,94 @@ gallery: true
 
 ## Project Structure
 
-```text
-main.py
-  Owns the end-to-end pipeline. It parses config, scans videos, runs YOLOE tracking,
-  extracts crops, runs Torchreid embeddings, clusters players, exports JSON/gallery,
-  records timing, and continues past per-video failures.
+**`main.py`**
 
-config.py
-  Defines CLI arguments, default values, dataclass configs, boolean parsing,
-  extension parsing, and config validation.
+Owns the end-to-end pipeline. It parses config, scans videos, runs YOLOE
+tracking, extracts crops, runs Torchreid embeddings, clusters players, exports
+JSON files and the gallery, records timing, and continues past per-video failures.
 
-video_io.py
-  Scans input folders recursively for supported videos, assigns stable content-hash
-  video IDs, and reads video metadata such as width, height, FPS, frame count,
-  and duration.
+**`config.py`**
 
-yoloe_player_detection.py
-  Loads the Ultralytics YOLOE segmentation model, applies the text prompt with
-  model.set_classes when supported, and exposes the model/tracker backend.
+Defines CLI arguments, default values, dataclass configs, boolean parsing,
+extension parsing, and config validation.
 
-player_tracking.py
-  Runs Ultralytics model.track with BoT-SORT or ByteTrack, converts raw detections
-  into local player tracks, estimates active-player scores, stores per-frame boxes
-  and masks, and renders tracking_debug.mp4.
+**`video_io.py`**
 
-crop_extraction.py
-  Reopens the video frames, extracts player crops for every local track, applies
-  crop quality filters, saves the best crops, and writes crop metadata.
+Scans input folders recursively for supported videos, assigns stable content-hash
+video IDs, and reads video metadata such as width, height, FPS, frame count, and
+duration.
 
-crop_quality.py
-  Scores crop sharpness, crop size, person-like shape, edge contact, mask area,
-  detection confidence, and near-duplicate crop spacing.
+**`yoloe_player_detection.py`**
 
-reid_embedding.py
-  Calls torchreid.utils.FeatureExtractor, extracts one embedding per crop, normalizes
-  crop embeddings, averages them into one embedding per local track, and writes
-  local_track_embeddings.npy plus local_track_index.json.
+Loads the Ultralytics YOLOE segmentation model, applies the text prompt with
+`model.set_classes` when supported, and exposes the model and tracker backend.
 
-clustering.py
-  Builds cosine similarity matrices, runs agglomerative clustering, converts cluster
-  labels into global player IDs, and writes similarity_matrix.csv.
+**`player_tracking.py`**
 
-conflict_rules.py
-  Enforces the same-video cannot-link rule. Two local tracks visible at the same
-  time in the same video cannot be the same global player.
+Runs Ultralytics `model.track` with BoT-SORT or ByteTrack, converts raw detections
+into local player tracks, estimates active-player scores, stores per-frame boxes
+and masks, and renders `tracking_debug.mp4`.
 
-identity_validation.py
-  Computes ReID plus outfit/color consistency, splits visually weak clusters, and
-  reports identity validation stats for each final player group.
+**`crop_extraction.py`**
 
-album_quality.py
-  Computes album_quality_score from track quality, crop quality, motion, activity
-  zone, cluster consistency, identity consistency, color consistency, and conflicts.
+Reopens video frames, extracts player crops for every local track, applies crop
+quality filters, saves the best crops, and writes crop metadata.
 
-gallery_export.py
-  Builds global/gallery.html for visual verification. Accepted albums are shown
-  by default, with full crop images using object-fit contain.
+**`crop_quality.py`**
 
-json_export.py
-  Copies accepted player crops into players/, writes per-player metadata, builds
-  player_groups.json and video_index.json, and optionally exports review/rejected
-  folders when enabled.
+Scores crop sharpness, crop size, person-like shape, edge contact, mask area,
+detection confidence, and near-duplicate crop spacing.
 
-timing_utils.py
-  Provides stage timers and duration formatting for terminal output and logs.json.
+**`reid_embedding.py`**
 
-utils.py
-  Shared helpers for directory creation, JSON writing, content-hash video IDs,
-  path formatting, bbox math, clamping, and vector normalization.
-```
+Calls `torchreid.utils.FeatureExtractor`, extracts one embedding per crop,
+normalizes crop embeddings, averages them into one embedding per local track, and
+writes `local_track_embeddings.npy` plus `local_track_index.json`.
+
+**`clustering.py`**
+
+Builds cosine similarity matrices, runs agglomerative clustering, converts cluster
+labels into global player IDs, and writes `similarity_matrix.csv`.
+
+**`conflict_rules.py`**
+
+Enforces the same-video cannot-link rule. Two local tracks visible at the same
+time in the same video cannot be the same global player.
+
+**`identity_validation.py`**
+
+Computes ReID plus outfit and color consistency, splits visually weak clusters,
+and reports identity validation stats for each final player group.
+
+**`album_quality.py`**
+
+Computes `album_quality_score` from track quality, crop quality, motion, activity
+zone, cluster consistency, identity consistency, color consistency, and conflicts.
+
+**`gallery_export.py`**
+
+Builds the gallery HTML file under the global output folder for visual
+verification. Accepted albums are shown by default, with full crop images using
+`object-fit: contain`.
+
+**`json_export.py`**
+
+Copies accepted player crops into the `players` folder, writes per-player metadata,
+builds `player_groups.json` and `video_index.json`, and optionally exports review
+and rejected folders when enabled.
+
+**`timing_utils.py`**
+
+Provides stage timers and duration formatting for terminal output and `logs.json`.
+
+**`utils.py`**
+
+Provides shared helpers for directory creation, JSON writing, content-hash video
+IDs, path formatting, bbox math, clamping, and vector normalization.
 
 ## Install
 
-This is the same install order used in the clean conda environment test. The test environment was created fresh as `player-album-readme-test`, then the project was run successfully on one video.
+This is the same install order used in the clean conda environment test.
 
 Clone the repo:
 
@@ -148,8 +158,8 @@ Prerequisites:
 Conda
 Git on PATH
 NVIDIA driver compatible with CUDA 12.1 wheels
-Input videos in a local folder such as highlights/ or test/
-Model weights placed in models/
+Input videos in a local folder such as highlights or test
+Model weights placed in the models folder
 ```
 
 Create and activate the environment:
@@ -165,7 +175,9 @@ Install ffmpeg before Python packages:
 conda install -c conda-forge ffmpeg -y
 ```
 
-`ffmpeg` is installed through conda because it is a system video tool, not a normal Python package. It gives OpenCV and the project a reliable video decode/encode backend for reading highlight clips and writing `tracking_debug.mp4`.
+`ffmpeg` is installed through conda because it is a system video tool, not a
+normal Python package. It gives OpenCV and the project a reliable video decode
+and encode backend for reading highlight clips and writing `tracking_debug.mp4`.
 
 Upgrade pip tooling:
 
@@ -189,23 +201,33 @@ Install Torchreid as an environment-level source checkout:
 
 ```powershell
 New-Item -ItemType Directory -Force "$env:CONDA_PREFIX\src" | Out-Null
-git clone https://github.com/KaiyangZhou/deep-person-reid.git "$env:CONDA_PREFIX\src\deep-person-reid"
-python -c "import os, pathlib, site; p = pathlib.Path(site.getsitepackages()[-1]) / 'deep_person_reid_src.pth'; p.write_text(str(pathlib.Path(os.environ['CONDA_PREFIX']) / 'src' / 'deep-person-reid') + '\n', encoding='utf-8'); print(p)"
+$torchreidSrc = "$env:CONDA_PREFIX\src\deep-person-reid"
+git clone https://github.com/KaiyangZhou/deep-person-reid.git $torchreidSrc
+$sitePackages = python -c "import site; print(site.getsitepackages()[-1])"
+$pthFile = Join-Path $sitePackages "deep_person_reid_src.pth"
+Set-Content -Path $pthFile -Value $torchreidSrc
 ```
 
-This source checkout is inside the conda environment, not inside this project. It avoids building Torchreid's optional Cython ranking extension on Windows, which otherwise requires Microsoft C++ Build Tools. The project still imports Torchreid as a dependency through Python's environment path.
+This source checkout is inside the conda environment, not inside this project.
+It avoids building Torchreid's optional Cython ranking extension on Windows,
+which otherwise requires Microsoft C++ Build Tools. The project still imports
+Torchreid as a dependency through Python's environment path.
 
 Check the environment:
 
 ```powershell
-python -c "import torch; import ultralytics; import cv2; import torchreid; from torchreid.utils import FeatureExtractor; print('torch', torch.__version__); print('cuda', torch.cuda.is_available()); print('ultralytics', ultralytics.__version__); print('cv2', cv2.__version__); print('torchreid', getattr(torchreid, '__version__', 'unknown')); print('FeatureExtractor OK')"
+python -c "import torch; print('torch', torch.__version__); print('cuda', torch.cuda.is_available())"
+python -c "import ultralytics, cv2; print('ultralytics', ultralytics.__version__); print('cv2', cv2.__version__)"
+python -c "import torchreid; print('torchreid', getattr(torchreid, '__version__', 'unknown'))"
+python -c "from torchreid.utils import FeatureExtractor; print('FeatureExtractor OK')"
 ffmpeg -version
 python main.py --help
 ```
 
 ## GPU
 
-The recommended first setup is for an NVIDIA RTX A2000 8GB laptop GPU:
+The clean setup was tested on an NVIDIA RTX A2000 laptop GPU with 8GB VRAM. This
+is the minimal verified GPU setup used during testing:
 
 ```text
 CUDA wheel: cu121
@@ -223,20 +245,22 @@ Check CUDA:
 python -c "import torch; print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu')"
 ```
 
-If VRAM is tight, reduce quality in this order:
+For lower VRAM, use smaller test settings first:
 
 ```text
-1. Use --imgsz 640
-2. Use models/yoloe-26m-seg.pt instead of yoloe-26x-seg.pt
-3. Use --save_debug_video false for faster tests
-4. Use --device cpu only for debugging, not for full runs
+Use --imgsz 640
+Use models/yoloe-26m-seg.pt instead of yoloe-26x-seg.pt
+Use --save_debug_video false for faster tests
+Use --device cpu only for debugging
 ```
 
-YOLOE may disable half precision internally if the model path produces a dtype mismatch. That warning is acceptable if the run continues.
+YOLOE may disable half precision internally if the model path produces a dtype
+mismatch. That warning is acceptable if the run continues.
 
 ## Models
 
-Put model files in `models/`. The folder is ignored by git because weights are large local artifacts.
+Put model files in the `models` folder. The folder is ignored by git because
+weights are large local artifacts.
 
 ```text
 models/
@@ -244,7 +268,8 @@ models/
   osnet_ain_x1_0_msmt17_256x128_amsgrad_ep50_lr0.0015_coslr_b64_fb10_softmax_labsmth_flip_jitter.pth
 ```
 
-The default command expects those exact paths. You can override them with `--yoloe_model` and `--reid_model_path`.
+The default command expects those exact paths. You can override them with
+`--yoloe_model` and `--reid_model_path`.
 
 Torchreid checkpoint used by the default config:
 
@@ -253,265 +278,323 @@ Model: osnet_ain_x1_0
 Training source: MSMT17 combineall=True
 Input: 256x128
 Distance: cosine
-Torchreid model-zoo result: 70.1 rank-1 / 43.3 mAP on MSMT17 -> Market1501,
-and 71.1 rank-1 / 52.7 mAP on MSMT17 -> DukeMTMC-reID
-Download: https://drive.google.com/file/d/1SigwBE6mPdqiJMqhuIY4aqC7--5CsMal/view?usp=sharing
+Torchreid model-zoo result:
+  70.1 rank-1 and 43.3 mAP on MSMT17 to Market1501
+  71.1 rank-1 and 52.7 mAP on MSMT17 to DukeMTMC-reID
+Download:
+  https://drive.google.com/file/d/1SigwBE6mPdqiJMqhuIY4aqC7--5CsMal/view?usp=sharing
 Local path expected by default:
-models/osnet_ain_x1_0_msmt17_256x128_amsgrad_ep50_lr0.0015_coslr_b64_fb10_softmax_labsmth_flip_jitter.pth
+  models/osnet_ain_x1_0_msmt17_256x128_amsgrad_ep50_lr0.0015_coslr_b64_fb10_softmax_labsmth_flip_jitter.pth
 ```
 
 Download it with `gdown` after `requirements.txt` is installed:
 
 ```powershell
 New-Item -ItemType Directory -Force models | Out-Null
-gdown --fuzzy "https://drive.google.com/file/d/1SigwBE6mPdqiJMqhuIY4aqC7--5CsMal/view?usp=sharing" -O "models/osnet_ain_x1_0_msmt17_256x128_amsgrad_ep50_lr0.0015_coslr_b64_fb10_softmax_labsmth_flip_jitter.pth"
+$reidUrl = "https://drive.google.com/file/d/1SigwBE6mPdqiJMqhuIY4aqC7--5CsMal/view?usp=sharing"
+$reidPath = "models/" + `
+  "osnet_ain_x1_0_msmt17_256x128_amsgrad_ep50_lr0.0015_coslr_b64_fb10_softmax_labsmth_flip_jitter.pth"
+gdown --fuzzy $reidUrl -O $reidPath
 ```
 
-The YOLOE segmentation model must also be placed in `models/`. The default is:
-
-```text
-models/yoloe-26x-seg.pt
-```
+The YOLOE segmentation model must also be placed in the `models` folder. The
+default is `models/yoloe-26x-seg.pt`.
 
 ## Running
 
 Minimal quality-first run:
 
 ```powershell
-python main.py --input_dir highlights --output_dir runs/player_album_best
+python main.py `
+  --input_dir highlights `
+  --output_dir runs/player_album_best
 ```
 
-This short command works because model paths and quality defaults are already set in `config.py`.
+This short command works because model paths and quality defaults are already set
+in `config.py`.
 
 Full default-equivalent command:
 
 ```powershell
-python main.py --input_dir highlights --output_dir runs/player_album_best --yoloe_model models/yoloe-26x-seg.pt --prompt person --tracker botsort.yaml --imgsz 960 --conf 0.40 --iou 0.70 --device 0 --half true --reid_model osnet_ain_x1_0 --reid_model_path models/osnet_ain_x1_0_msmt17_256x128_amsgrad_ep50_lr0.0015_coslr_b64_fb10_softmax_labsmth_flip_jitter.pth --max_crops_per_track 16 --min_track_frames 25 --min_crop_height 150 --cluster_method agglomerative --distance_threshold 0.18 --save_debug_video true --save_gallery true
+$reidPath = "models/" + `
+  "osnet_ain_x1_0_msmt17_256x128_amsgrad_ep50_lr0.0015_coslr_b64_fb10_softmax_labsmth_flip_jitter.pth"
+python main.py `
+  --input_dir highlights `
+  --output_dir runs/player_album_best `
+  --yoloe_model models/yoloe-26x-seg.pt `
+  --prompt person `
+  --tracker botsort.yaml `
+  --imgsz 960 `
+  --conf 0.40 `
+  --iou 0.70 `
+  --device 0 `
+  --half true `
+  --reid_model osnet_ain_x1_0 `
+  --reid_model_path $reidPath `
+  --max_crops_per_track 16 `
+  --min_track_frames 25 `
+  --min_crop_height 150 `
+  --cluster_method agglomerative `
+  --distance_threshold 0.18 `
+  --save_debug_video true `
+  --save_gallery true
 ```
 
 Small test run:
 
 ```powershell
-python main.py --input_dir test --output_dir runs/player_album_test --max_videos 1 --save_debug_video false --save_gallery false
+python main.py `
+  --input_dir test `
+  --output_dir runs/player_album_test `
+  --max_videos 1 `
+  --save_debug_video false `
+  --save_gallery false
 ```
 
 Prompt or confidence test:
 
 ```powershell
-python main.py --input_dir highlights --output_dir runs/player_album_person_conf045 --prompt person --conf 0.45
+python main.py `
+  --input_dir highlights `
+  --output_dir runs/player_album_person_conf045 `
+  --prompt person `
+  --conf 0.45
 ```
 
 CPU debug run:
 
 ```powershell
-python main.py --input_dir test --output_dir runs/player_album_cpu_debug --max_videos 1 --device cpu --half false --save_debug_video false
+python main.py `
+  --input_dir test `
+  --output_dir runs/player_album_cpu_debug `
+  --max_videos 1 `
+  --device cpu `
+  --half false `
+  --save_debug_video false
 ```
 
 ## Arguments
 
-All arguments are configurable from the CLI. The important defaults are already in `config.py`, so the normal run command can stay short.
+All arguments are configurable from the CLI. The important defaults are already
+in `config.py`, so the normal run command can stay short.
 
-```text
---input_dir
-  Default: highlights
-  Folder containing input videos. Videos are scanned recursively.
+**`--input_dir`**
 
---output_dir
-  Default: runs/player_album_best
-  Run output folder.
+Default: `highlights`. Folder containing input videos. Videos are scanned
+recursively.
 
---yoloe_model
-  Default: models/yoloe-26x-seg.pt
-  YOLOE segmentation model weights.
+**`--output_dir`**
 
---prompt
-  Default: person
-  YOLOE text prompt. Good first choices are person, player, or athlete.
+Default: `runs/player_album_best`. Run output folder.
 
---tracker
-  Default: botsort.yaml
-  Ultralytics tracker config. Use botsort.yaml first; bytetrack.yaml is the backup.
+**`--yoloe_model`**
 
---imgsz
-  Default: 960
-  YOLOE inference image size.
+Default: `models/yoloe-26x-seg.pt`. YOLOE segmentation model weights.
 
---conf
-  Default: 0.40
-  Detection confidence threshold. Higher values produce fewer but cleaner tracks.
+**`--prompt`**
 
---iou
-  Default: 0.70
-  Detection NMS IoU threshold.
+Default: `person`. YOLOE text prompt. Good first choices are `person`, `player`,
+or `athlete`.
 
---device
-  Default: 0
-  Torch/Ultralytics device. Use 0 for first GPU, cpu for CPU debug.
+**`--tracker`**
 
---half
-  Default: true
-  Use FP16 where supported.
+Default: `botsort.yaml`. Ultralytics tracker config. Use `botsort.yaml` first.
+Use `bytetrack.yaml` as the backup tracker.
 
---reid_model
-  Default: osnet_ain_x1_0
-  Torchreid model name used by FeatureExtractor.
+**`--imgsz`**
 
---reid_model_path
-  Default: models/osnet_ain_x1_0_msmt17_256x128_amsgrad_ep50_lr0.0015_coslr_b64_fb10_softmax_labsmth_flip_jitter.pth
-  Local Torchreid checkpoint path.
+Default: `960`. YOLOE inference image size.
 
---max_crops_per_track
-  Default: 16
-  Maximum best crops saved per local track.
+**`--conf`**
 
---min_track_frames
-  Default: 25
-  Reject local tracks shorter than this many frames when active filtering is enabled.
+Default: `0.40`. Detection confidence threshold. Higher values produce fewer but
+cleaner tracks.
 
---min_crop_height
-  Default: 150
-  Reject crops shorter than this many pixels.
+**`--iou`**
 
---cluster_method
-  Default: agglomerative
-  Global clustering backend.
+Default: `0.70`. Detection NMS IoU threshold.
 
---distance_threshold
-  Default: 0.18
-  Agglomerative clustering cosine distance threshold.
+**`--device`**
 
---identity_split_enabled
-  Default: true
-  Enable second-pass splitting for visually inconsistent clusters.
+Default: `0`. Torch and Ultralytics device. Use `0` for the first GPU or `cpu`
+for CPU debug.
 
---identity_split_min_cluster_size
-  Default: 8
-  Only run identity splitting on clusters at least this large.
+**`--half`**
 
---identity_split_distance_threshold
-  Default: 0.14
-  Distance threshold used for second-pass identity splitting.
+Default: `true`. Use FP16 where supported.
 
---identity_color_weight
-  Default: 0.25
-  Weight of outfit/color fingerprint similarity in identity validation.
+**`--reid_model`**
 
---identity_min_consistency
-  Default: 0.74
-  Combined identity consistency threshold before a cluster is marked weak.
+Default: `osnet_ain_x1_0`. Torchreid model name used by `FeatureExtractor`.
 
---identity_min_color_consistency
-  Default: 0.35
-  Color consistency threshold before a cluster is marked outfit-diverse.
+**`--reid_model_path`**
 
---identity_split_mean_threshold
-  Default: 0.78
-  Split a cluster when average combined identity similarity falls below this.
+Default: the OSNet-AIN MSMT17 checkpoint in the `models` folder. This is the
+local Torchreid checkpoint path.
 
---identity_split_color_threshold
-  Default: 0.52
-  Split a cluster when outfit/color consistency falls below this.
+**`--max_crops_per_track`**
 
---identity_split_p10_threshold
-  Default: 0.62
-  Low-tail combined similarity threshold for identity splitting.
+Default: `16`. Maximum best crops saved per local track.
 
---identity_split_std_threshold
-  Default: 0.07
-  Combined similarity standard deviation threshold for identity splitting.
+**`--min_track_frames`**
 
---identity_split_large_min_similarity
-  Default: 0.58
-  Minimum pair similarity tolerated inside large identity clusters.
+Default: `25`. Reject local tracks shorter than this many frames when active
+filtering is enabled.
 
---identity_album_min_consistency
-  Default: 0.70
-  Album scoring penalty threshold for identity consistency.
+**`--min_crop_height`**
 
---identity_album_large_min_consistency
-  Default: 0.78
-  Album scoring penalty threshold for large identity clusters.
+Default: `150`. Reject crops shorter than this many pixels.
 
---identity_album_min_color_consistency
-  Default: 0.50
-  Album scoring penalty threshold for outfit/color consistency.
+**`--cluster_method`**
 
---save_debug_video
-  Default: true
-  Render per-video tracking_debug.mp4.
+Default: `agglomerative`. Global clustering backend.
 
---save_gallery
-  Default: true
-  Render global/gallery.html.
+**`--distance_threshold`**
 
---max_videos
-  Default: none
-  Optional cap for quick tests.
+Default: `0.18`. Agglomerative clustering cosine distance threshold.
 
---video_extensions
-  Default: .mp4,.mov,.avi,.mkv
-  Comma-separated supported extensions.
+**`--identity_split_enabled`**
 
---crop_padding
-  Default: 0.08
-  BBox padding ratio before crop extraction.
+Default: `true`. Enable second-pass splitting for visually inconsistent clusters.
 
---blur_threshold
-  Default: 110.0
-  Minimum Laplacian sharpness score.
+**`--identity_split_min_cluster_size`**
 
---mask_crop_mode
-  Default: bbox
-  Crop mode: bbox, masked, or both.
+Default: `8`. Only run identity splitting on clusters at least this large.
 
---min_mask_area_ratio
-  Default: 0.02
-  Minimum mask area divided by bbox area.
+**`--identity_split_distance_threshold`**
 
---min_person_shape_score
-  Default: 0.35
-  Minimum person-like crop shape score.
+Default: `0.14`. Distance threshold used for second-pass identity splitting.
 
---max_edge_touch_ratio
-  Default: 0.75
-  Reject crops touching too much of the frame edge.
+**`--identity_color_weight`**
 
---active_player_filter
-  Default: true
-  Enable track filtering based on duration, movement, crop height, size, and activity zone.
+Default: `0.25`. Weight of outfit and color fingerprint similarity in identity
+validation.
 
---min_movement_score
-  Default: 0.04
-  Minimum normalized movement score for active-player filtering.
+**`--identity_min_consistency`**
 
---min_track_duration_sec
-  Default: 0.8
-  Minimum visible duration for active-player filtering.
+Default: `0.74`. Combined identity consistency threshold before a cluster is
+marked weak.
 
---quality_filter_export
-  Default: true
-  Use album_quality_score to separate accepted, review, and rejected groups.
+**`--identity_min_color_consistency`**
 
---album_accept_threshold
-  Default: 0.78
-  Minimum album_quality_score copied into players/.
+Default: `0.35`. Color consistency threshold before a cluster is marked
+outfit-diverse.
 
---album_review_threshold
-  Default: 0.55
-  Minimum album_quality_score considered review instead of rejected.
+**`--identity_split_mean_threshold`**
 
---export_review_rejected_folders
-  Default: false
-  If true, copy review/ and rejected/ folders. Default keeps only players/.
+Default: `0.78`. Split a cluster when average combined identity similarity falls
+below this.
 
---gallery_include_review_rejected
-  Default: false
-  If true, show review/rejected groups in gallery.html.
-```
+**`--identity_split_color_threshold`**
+
+Default: `0.52`. Split a cluster when outfit and color consistency falls below
+this.
+
+**`--identity_split_p10_threshold`**
+
+Default: `0.62`. Low-tail combined similarity threshold for identity splitting.
+
+**`--identity_split_std_threshold`**
+
+Default: `0.07`. Combined similarity standard deviation threshold for identity
+splitting.
+
+**`--identity_split_large_min_similarity`**
+
+Default: `0.58`. Minimum pair similarity tolerated inside large identity clusters.
+
+**`--identity_album_min_consistency`**
+
+Default: `0.70`. Album scoring penalty threshold for identity consistency.
+
+**`--identity_album_large_min_consistency`**
+
+Default: `0.78`. Album scoring penalty threshold for large identity clusters.
+
+**`--identity_album_min_color_consistency`**
+
+Default: `0.50`. Album scoring penalty threshold for outfit and color consistency.
+
+**`--save_debug_video`**
+
+Default: `true`. Render per-video `tracking_debug.mp4`.
+
+**`--save_gallery`**
+
+Default: `true`. Render `global/gallery.html`.
+
+**`--max_videos`**
+
+Default: none. Optional cap for quick tests.
+
+**`--video_extensions`**
+
+Default: `.mp4,.mov,.avi,.mkv`. Comma-separated supported extensions.
+
+**`--crop_padding`**
+
+Default: `0.08`. BBox padding ratio before crop extraction.
+
+**`--blur_threshold`**
+
+Default: `110.0`. Minimum Laplacian sharpness score.
+
+**`--mask_crop_mode`**
+
+Default: `bbox`. Crop mode: `bbox`, `masked`, or `both`.
+
+**`--min_mask_area_ratio`**
+
+Default: `0.02`. Minimum mask area divided by bbox area.
+
+**`--min_person_shape_score`**
+
+Default: `0.35`. Minimum person-like crop shape score.
+
+**`--max_edge_touch_ratio`**
+
+Default: `0.75`. Reject crops touching too much of the frame edge.
+
+**`--active_player_filter`**
+
+Default: `true`. Enable track filtering based on duration, movement, crop height,
+size, and activity zone.
+
+**`--min_movement_score`**
+
+Default: `0.04`. Minimum normalized movement score for active-player filtering.
+
+**`--min_track_duration_sec`**
+
+Default: `0.8`. Minimum visible duration for active-player filtering.
+
+**`--quality_filter_export`**
+
+Default: `true`. Use `album_quality_score` to separate accepted, review, and
+rejected groups.
+
+**`--album_accept_threshold`**
+
+Default: `0.78`. Minimum `album_quality_score` copied into the `players` folder.
+
+**`--album_review_threshold`**
+
+Default: `0.55`. Minimum `album_quality_score` considered review instead of
+rejected.
+
+**`--export_review_rejected_folders`**
+
+Default: `false`. If true, copy review and rejected folders. The default keeps
+only the `players` folder.
+
+**`--gallery_include_review_rejected`**
+
+Default: `false`. If true, show review and rejected groups in `gallery.html`.
 
 ## Input And Output
 
-Input videos stay untouched. The code does not delete, move, rename, modify, or overwrite input videos or model weights.
+Input videos stay untouched. The code does not delete, move, rename, modify, or
+overwrite input videos or model weights.
 
 Supported video extensions:
 
@@ -550,80 +633,77 @@ runs/player_album_best/
   logs.json
 ```
 
-Output file meanings:
+**`videos/<video_id>/tracking_debug.mp4`**
 
-```text
-videos/<video_id>/tracking_debug.mp4
-  Optional debug video showing YOLOE/tracker inference boxes, masks, IDs, confidence,
-  prompt label, and active/ignored status.
+Optional debug video showing YOLOE and tracker inference boxes, masks, IDs,
+confidence, prompt label, and active or ignored status.
 
-videos/<video_id>/local_tracks.json
-  Per-video track data: source metadata, local track IDs, frame indexes, bboxes,
-  confidence, active status, crop paths, and track scores.
+**`videos/<video_id>/local_tracks.json`**
 
-videos/<video_id>/crops/<local_track_id>/crop_####.jpg
-  Saved best crops for a local player track.
+Per-video track data: source metadata, local track IDs, frame indexes, bboxes,
+confidence, active status, crop paths, and track scores.
 
-videos/<video_id>/crops/<local_track_id>/metadata.json
-  Crop-level metadata and quality scores for that local track.
+**`videos/<video_id>/crops/<local_track_id>/crop_####.jpg`**
 
-global/local_track_embeddings.npy
-  One normalized ReID embedding per local player track.
+Saved best crops for a local player track.
 
-global/local_track_index.json
-  JSON index mapping each embedding row to local_player_id, video_id, source video,
-  crop paths, representative crop, and embedding quality information.
+**`videos/<video_id>/crops/<local_track_id>/metadata.json`**
 
-global/similarity_matrix.csv
-  Pairwise cosine similarity matrix between local track embeddings.
+Crop-level metadata and quality scores for that local track.
 
-global/player_groups.json
-  Global player groups with player_id, assigned local tracks, videos, representative
-  crop, album_quality_score, export status, conflict info, and identity validation.
+**`global/local_track_embeddings.npy`**
 
-global/video_index.json
-  Video-level index showing which accepted global players appear in each video.
+One normalized ReID embedding per local player track.
 
-global/gallery.html
-  Visual verification gallery. By default it shows accepted player groups only.
-  It references crop images with relative paths, so send the run folder or a
-  packaged standalone export if sharing with another person.
+**`global/local_track_index.json`**
 
-players/P####/
-  Accepted player album folder. Contains representative.jpg, one best crop per
-  assigned local track, and metadata.json.
+JSON index mapping each embedding row to local player ID, video ID, source video,
+crop paths, representative crop, and embedding quality information.
 
-logs.json
-  Full run config, model paths, prompt, tracker, timing, warnings, errors, number
-  of videos, number of local tracks, and number of global/accepted/review/rejected players.
-```
+**`global/similarity_matrix.csv`**
 
-Only accepted player albums are copied into `players/` by default. Review and rejected groups remain in JSON metadata unless `--export_review_rejected_folders true` is enabled.
+Pairwise cosine similarity matrix between local track embeddings.
 
-## Tested Setup
+**`global/player_groups.json`**
 
-The clean environment test used the same install order above. The final smoke test command was:
+Global player groups with player ID, assigned local tracks, videos, representative
+crop, `album_quality_score`, export status, conflict info, and identity validation.
 
-```powershell
-python main.py --input_dir test --output_dir runs/readme_env_smoke_clean --max_videos 1 --save_debug_video false --save_gallery false
-```
+**`global/video_index.json`**
 
-Result:
+Video-level index showing which accepted global players appear in each video.
 
-```text
-Videos processed: 1
-Local tracks: 29
-Global player groups: 5
-Accepted players: 3
-Review players: 2
-Errors: 0
-Total folder time: 63.7s
-```
+**`global/gallery.html`**
 
-The only expected warnings were Torchreid's optional Cython ranking warning and a PyTorch checkpoint warning from upstream Torchreid.
+Visual verification gallery. By default it shows accepted player groups only. It
+references crop images with relative paths, so send the run folder or a packaged
+standalone export if sharing with another person.
 
-## Reproducibility
+**`players/P####/`**
 
-Internal video IDs use a content hash of the video bytes. The same video file should receive the same `video_id` even if it is moved into a different folder, copied to another machine, or mounted through Docker.
+Accepted player album folder. It contains `representative.jpg`, one best crop per
+assigned local track, and `metadata.json`.
 
-The most important run settings are saved into `logs.json`, including model paths, prompt, tracker, confidence threshold, ReID model, clustering config, export config, timing, warnings, and errors.
+**`logs.json`**
+
+Full run config, model paths, prompt, tracker, timing, warnings, errors, number
+of videos, number of local tracks, and number of global, accepted, review, and
+rejected players.
+
+Only accepted player albums are copied into the `players` folder by default.
+Review and rejected groups remain in JSON metadata unless
+`--export_review_rejected_folders true` is enabled.
+
+## Video ID Reproducibility
+
+Internal video IDs use a content hash of the video bytes. The same video file
+should receive the same `video_id` even if it is moved into a different folder,
+copied to another machine, or mounted through Docker.
+
+This matters because output folders, local track IDs, `video_index.json`, and
+`player_groups.json` all use the internal video ID. Content-based IDs make old
+and new runs easier to compare when the file paths change.
+
+The most important run settings are saved into `logs.json`, including model
+paths, prompt, tracker, confidence threshold, ReID model, clustering config,
+export config, timing, warnings, and errors.
