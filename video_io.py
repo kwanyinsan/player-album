@@ -57,21 +57,27 @@ def read_video_metadata(path: Path, video_id: str) -> VideoInfo:
         cap.release()
 
 
-def scan_videos(input_dir: Path, extensions: tuple[str, ...], max_videos: int | None = None) -> list[VideoInfo]:
+def scan_videos(input_dirs: tuple[Path, ...], extensions: tuple[str, ...], max_videos: int | None = None) -> list[VideoInfo]:
     used_ids: set[str] = set()
     extension_set = {ext.lower() for ext in extensions}
-    paths = sorted(
-        (
-            path
-            for path in input_dir.rglob("*")
-            if path.is_file() and path.suffix.lower() in extension_set
-        ),
-        key=lambda path: path.relative_to(input_dir).as_posix().lower(),
-    )
+    
+    all_paths = []
+    for input_dir in input_dirs:
+        paths = sorted(
+            (
+                path
+                for path in input_dir.rglob("*")
+                if path.is_file() and path.suffix.lower() in extension_set
+            ),
+            key=lambda path: path.relative_to(input_dir).as_posix().lower(),
+        )
+        all_paths.extend(paths)
+        
     if max_videos is not None:
-        paths = paths[:max_videos]
+        all_paths = all_paths[:max_videos]
+        
     videos: list[VideoInfo] = []
-    for path in paths:
+    for path in all_paths:
         video_id = stable_video_id(path, used_ids)
         videos.append(read_video_metadata(path, video_id))
     return videos

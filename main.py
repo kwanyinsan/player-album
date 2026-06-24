@@ -47,7 +47,7 @@ def main(argv: list[str] | None = None) -> int:
         videos, elapsed = _timed(
             timers,
             "scan_videos",
-            lambda: scan_videos(config.input_dir, config.video_extensions, config.max_videos),
+            lambda: scan_videos(config.input_dirs, config.video_extensions, config.max_videos),
         )
         print(f"Loaded {len(videos)} video(s) in {format_duration(elapsed)}")
     except Exception as exc:
@@ -262,7 +262,7 @@ def main(argv: list[str] | None = None) -> int:
 
 def _base_logs(config: PipelineConfig) -> dict[str, Any]:
     return {
-        "input_dir": config.input_dir.as_posix(),
+        "input_dirs": [d.as_posix() for d in config.input_dirs],
         "output_dir": config.output_dir.as_posix(),
         "yoloe_model": config.detector.yoloe_model.as_posix(),
         "prompt": config.detector.prompt,

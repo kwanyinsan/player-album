@@ -110,7 +110,7 @@ class ExportConfig:
 
 @dataclass(frozen=True)
 class PipelineConfig:
-    input_dir: Path
+    input_dirs: tuple[Path, ...]
     output_dir: Path
     video_extensions: tuple[str, ...]
     max_videos: Optional[int]
@@ -127,7 +127,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         description="Build player and person albums from tracked highlight videos."
     )
 
-    parser.add_argument("--input_dir", default="highlights", help="Folder of input videos.")
+    parser.add_argument("--input_dirs", nargs="+", help="Folders of input videos.")
+    parser.add_argument("--input_dir", default="highlights", help="Folder of input videos (deprecated, use --input_dirs).")
     parser.add_argument("--output_dir", default="runs/player_album_best", help="Output run folder.")
     parser.add_argument("--yoloe_model", default="models/yoloe-26x-seg.pt", help="YOLOE segmentation weights.")
     parser.add_argument("--prompt", default="person", help="YOLOE text prompt, for example 'person' or 'player'.")
@@ -191,8 +192,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def config_from_args(args: argparse.Namespace) -> PipelineConfig:
+    input_dirs = tuple(Path(p) for p in args.input_dirs) if getattr(args, "input_dirs", None) else (Path(args.input_dir),)
     return PipelineConfig(
-        input_dir=Path(args.input_dir),
+        input_dirs=input_dirs,
         output_dir=Path(args.output_dir),
         video_extensions=tuple(args.video_extensions),
         max_videos=args.max_videos,
@@ -263,10 +265,13 @@ def parse_config(argv: Optional[list[str]] = None) -> PipelineConfig:
 
 
 def validate_config(config: PipelineConfig) -> None:
-    if not config.input_dir.exists():
-        raise FileNotFoundError(f"Input directory does not exist: {config.input_dir}")
-    if not config.input_dir.is_dir():
-        raise NotADirectoryError(f"Input path is not a directory: {config.input_dir}")
+    if not config.input_dirs:
+        raise ValueError("At least one input directory must be provided.")
+    for input_dir in config.input_dirs:
+        if not input_dir.exists():
+            raise FileNotFoundError(f"Input directory does not exist: {input_dir}")
+        if not input_dir.is_dir():
+            raise NotADirectoryError(f"Input path is not a directory: {input_dir}")
     if not config.detector.yoloe_model.exists():
         raise FileNotFoundError(f"YOLOE model file does not exist: {config.detector.yoloe_model}")
     if config.reid.reid_model_path is not None and not config.reid.reid_model_path.exists():
