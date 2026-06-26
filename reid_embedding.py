@@ -71,17 +71,38 @@ def extract_track_embeddings(
 
     for track in eligible_tracks:
         crop_embeddings: list[np.ndarray] = []
-        for crop_rel_path in track.crop_paths:
-            crop_path = output_root / crop_rel_path
+        crop_abs_paths = [str(output_root / p) for p in track.crop_paths]
+        
+        if crop_abs_paths:
             try:
-                features = extractor([str(crop_path)])
-                vector = _feature_to_vector(features)
-                crop_embeddings.append(normalize_vector(vector))
+                # Batch extract all crops for this track
+                features = extractor(crop_abs_paths)
+                
+                # Convert the features tensor/array to numpy
+                if hasattr(features, "detach"):
+                    features = features.detach()
+                if hasattr(features, "cpu"):
+                    features = features.cpu()
+                if hasattr(features, "numpy"):
+                    features_array = features.numpy()
+                else:
+                    features_array = np.asarray(features)
+                    
+                features_array = np.asarray(features_array, dtype=np.float32)
+                
+                # If only 1 crop, it might return 1D or 2D (1xN). Ensure 2D.
+                if features_array.ndim == 1:
+                    features_array = features_array.reshape(1, -1)
+                elif features_array.ndim > 2:
+                    features_array = features_array.reshape(features_array.shape[0], -1)
+                    
+                for i in range(features_array.shape[0]):
+                    crop_embeddings.append(normalize_vector(features_array[i]))
             except Exception as exc:
                 errors.append(
                     {
                         "local_player_id": track.local_player_id,
-                        "crop_path": crop_rel_path,
+                        "crop_path": "batch_extraction",
                         "error": str(exc),
                     }
                 )
