@@ -11,6 +11,7 @@ from config import FilterConfig
 from utils import bbox_area, bbox_center, clamp, ensure_dir, format_local_player_id
 from video_io import VideoInfo, create_video_writer, iter_video_frames
 from yoloe_player_detection import YOLOEPlayerDetector
+from player_video_sorting import compact_frame_ranges
 
 
 @dataclass
@@ -64,6 +65,7 @@ class LocalTrack:
     ignored_reason: str | None = None
     crop_paths: list[str] = field(default_factory=list)
     representative_crop: str | None = None
+    observed_frame_ranges: list[list[int]] | None = None
 
     def to_dict(self, include_frames: bool = True) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -94,6 +96,8 @@ class LocalTrack:
         }
         if include_frames:
             payload["frames"] = [frame.to_dict() for frame in self.frames]
+        if self.observed_frame_ranges is not None:
+            payload["observed_frame_ranges"] = self.observed_frame_ranges
         return payload
 
 
@@ -119,7 +123,10 @@ def _process_video_tracking_once(
     min_crop_height: int,
 ) -> list[LocalTrack]:
     tracks_by_id: dict[str, LocalTrack] = {}
+    video_info.processed_frame_count = 0
+    video_info.analysis_complete = False
     for frame_index, result in enumerate(detector.track_video(video_info.path)):
+        video_info.processed_frame_count = frame_index + 1
         for track_frame in _extract_track_frames(result, frame_index, video_info.video_id, detector.config.prompt):
             track = tracks_by_id.get(track_frame.local_track_id)
             if track is None:
@@ -131,6 +138,7 @@ def _process_video_tracking_once(
                 )
                 tracks_by_id[track_frame.local_track_id] = track
             track.frames.append(track_frame)
+    video_info.analysis_complete = True
     tracks = sorted(tracks_by_id.values(), key=lambda item: item.local_player_id)
     finalize_track_stats(tracks, video_info, filter_config, min_crop_height)
     return tracks
@@ -158,6 +166,7 @@ def finalize_track_stats(
     for track in tracks:
         track.frames.sort(key=lambda item: item.frame_index)
         track.frame_count = len(track.frames)
+        track.observed_frame_ranges = compact_frame_ranges(frame.frame_index for frame in track.frames)
         track.start_frame = track.frames[0].frame_index if track.frames else 0
         track.end_frame = track.frames[-1].frame_index if track.frames else 0
         track.duration_sec = (

@@ -7,6 +7,7 @@ from typing import Any
 import numpy as np
 
 from config import ClusteringConfig
+from artifact_paths import artifact_path
 from reid_embedding import EmbeddingRecord
 from utils import clamp, normalize_vector
 
@@ -17,11 +18,12 @@ def split_identity_inconsistent_clusters(
     output_root: Path,
     similarity_matrix: np.ndarray,
     config: ClusteringConfig,
+    source_root: Path | None = None,
 ) -> tuple[list[int], dict[str, Any]]:
     if not labels or not config.identity_split_enabled:
         return labels, {"enabled": False, "split_clusters": [], "final_clusters": {}}
 
-    fingerprints = _load_track_fingerprints(records, output_root)
+    fingerprints = _load_track_fingerprints(records, output_root, source_root)
     combined_similarity = _combined_similarity_matrix(
         similarity_matrix,
         fingerprints,
@@ -98,15 +100,17 @@ def identity_stats_by_player_id(
     return output
 
 
-def _load_track_fingerprints(records: list[EmbeddingRecord], output_root: Path) -> list[np.ndarray | None]:
-    return [_track_fingerprint(record, output_root) for record in records]
+def _load_track_fingerprints(records: list[EmbeddingRecord], output_root: Path,
+                             source_root: Path | None = None) -> list[np.ndarray | None]:
+    return [_track_fingerprint(record, output_root, source_root) for record in records]
 
 
-def _track_fingerprint(record: EmbeddingRecord, output_root: Path) -> np.ndarray | None:
+def _track_fingerprint(record: EmbeddingRecord, output_root: Path,
+                       source_root: Path | None = None) -> np.ndarray | None:
     paths = _fingerprint_crop_paths(record)
     crop_fingerprints: list[np.ndarray] = []
     for rel_path in paths:
-        fingerprint = _crop_color_fingerprint(output_root / rel_path)
+        fingerprint = _crop_color_fingerprint(artifact_path(output_root, rel_path, source_root))
         if fingerprint is not None:
             crop_fingerprints.append(fingerprint)
     if not crop_fingerprints:

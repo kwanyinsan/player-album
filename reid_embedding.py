@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
 from config import ReidConfig
+from artifact_paths import artifact_path
 from player_tracking import LocalTrack
-from utils import ensure_dir, normalize_vector, write_json
+from utils import ensure_dir, write_json
 
 
 @dataclass
@@ -47,6 +48,23 @@ class EmbeddingOutput:
     records: list[EmbeddingRecord]
     errors: list[dict[str, str]]
     device_used: str
+    track_statuses: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+
+class EmbeddingDimensionError(ValueError):
+    """An extractor returned vectors incompatible with the collection."""
+
+
+def validated_vector(vector: np.ndarray, expected_dimension: int | None = None) -> np.ndarray:
+    vector = np.asarray(vector, dtype=np.float32)
+    if vector.ndim != 1 or not vector.size:
+        raise ValueError("Expected a nonempty one-dimensional embedding")
+    if expected_dimension is not None and vector.size != expected_dimension:
+        raise EmbeddingDimensionError(f"Embedding dimension {vector.size} differs from expected {expected_dimension}")
+    norm = float(np.linalg.norm(vector))
+    if not np.isfinite(vector).all() or not np.isfinite(norm) or norm <= 1e-12:
+        raise ValueError("Embedding contains nonfinite values or has zero norm")
+    return vector / norm
 
 
 def extract_track_embeddings(
@@ -55,38 +73,70 @@ def extract_track_embeddings(
     global_dir: Path,
     reid_config: ReidConfig,
     requested_device: str,
+    source_root: Path | None = None,
+    expected_dimension: int | None = None,
 ) -> EmbeddingOutput:
     ensure_dir(global_dir)
     eligible_tracks = [track for track in tracks if track.crop_paths]
     errors: list[dict[str, str]] = []
+    statuses = {track.local_player_id: {"status": "no_usable_crops", "attempt_count": 0,
+                "embedding_row": None, "failed_stage": None, "last_error": None} for track in tracks}
     if not eligible_tracks:
         embeddings = np.zeros((0, 0), dtype=np.float32)
         records: list[EmbeddingRecord] = []
         _save_embedding_outputs(global_dir, embeddings, records)
-        return EmbeddingOutput(embeddings=embeddings, records=records, errors=errors, device_used="none")
+        return EmbeddingOutput(embeddings, records, errors, "none", statuses)
 
-    extractor, device_used = _load_extractor(reid_config, requested_device)
+    try:
+        extractor, device_used = _load_extractor(reid_config, requested_device)
+    except RuntimeError as exc:
+        if "out of memory" not in str(exc).lower():
+            raise
+        for track in eligible_tracks:
+            error = {"local_player_id": track.local_player_id, "crop_path": "", "error": str(exc)}
+            errors.append(error)
+            statuses[track.local_player_id] = {"status": "retryable_error", "attempt_count": 1,
+                "embedding_row": None, "failed_stage": "reid_initialization", "last_error": str(exc)}
+        embeddings = np.zeros((0, 0), dtype=np.float32)
+        _save_embedding_outputs(global_dir, embeddings, [])
+        return EmbeddingOutput(embeddings, [], errors, "unavailable", statuses)
     rows: list[np.ndarray] = []
     records = []
 
     for track in eligible_tracks:
         crop_embeddings: list[np.ndarray] = []
+        track_errors = []
         for crop_rel_path in track.crop_paths:
-            crop_path = output_root / crop_rel_path
             try:
+                crop_path = artifact_path(output_root, crop_rel_path, source_root)
                 features = extractor([str(crop_path)])
-                vector = _feature_to_vector(features)
-                crop_embeddings.append(normalize_vector(vector))
+                vector = validated_vector(_feature_to_vector(features), expected_dimension)
+                if expected_dimension is None:
+                    expected_dimension = vector.size
+                crop_embeddings.append(vector)
+            except EmbeddingDimensionError:
+                raise
             except Exception as exc:
-                errors.append(
+                error = (
                     {
                         "local_player_id": track.local_player_id,
                         "crop_path": crop_rel_path,
                         "error": str(exc),
+                        "status": "blocked_error" if isinstance(exc, OSError) or "Missing or external artifact" in str(exc)
+                                  else "retryable_error",
                     }
                 )
+                errors.append(error)
+                track_errors.append(error)
+
+        status = {"status": "retryable_error", "attempt_count": 1, "embedding_row": None,
+                  "failed_stage": "reid_crop", "last_error": track_errors[-1]["error"] if track_errors else None,
+                  "crop_errors": track_errors}
+        statuses[track.local_player_id] = status
 
         if not crop_embeddings:
+            if track_errors and all(e["status"] == "blocked_error" for e in track_errors):
+                status["status"] = "blocked_error"
             errors.append(
                 {
                     "local_player_id": track.local_player_id,
@@ -97,9 +147,15 @@ def extract_track_embeddings(
             continue
 
         crop_stack = np.vstack(crop_embeddings)
-        track_embedding = normalize_vector(np.mean(crop_stack, axis=0))
+        try:
+            track_embedding = validated_vector(np.mean(crop_stack, axis=0), expected_dimension)
+        except ValueError as exc:
+            status.update(failed_stage="reid_average", last_error=str(exc))
+            errors.append({"local_player_id": track.local_player_id, "crop_path": "", "error": str(exc)})
+            continue
         consistency_score = _embedding_consistency(crop_stack)
         row_index = len(rows)
+        status.update(status="complete", embedding_row=row_index, failed_stage=None, last_error=None)
         rows.append(track_embedding)
         records.append(
             EmbeddingRecord(
@@ -119,7 +175,7 @@ def extract_track_embeddings(
 
     embeddings = np.vstack(rows).astype(np.float32) if rows else np.zeros((0, 0), dtype=np.float32)
     _save_embedding_outputs(global_dir, embeddings, records)
-    return EmbeddingOutput(embeddings=embeddings, records=records, errors=errors, device_used=device_used)
+    return EmbeddingOutput(embeddings, records, errors, device_used, statuses)
 
 
 def _load_extractor(reid_config: ReidConfig, requested_device: str):
@@ -166,8 +222,8 @@ def _feature_to_vector(features: object) -> np.ndarray:
     else:
         array = np.asarray(features)
     array = np.asarray(array, dtype=np.float32)
-    if array.ndim == 0:
-        raise ValueError("ReID extractor returned a scalar feature.")
+    if array.ndim not in (1, 2) or (array.ndim == 2 and array.shape[0] != 1):
+        raise ValueError("ReID extractor must return one vector for one crop")
     if array.ndim == 1:
         return array
     return array.reshape(array.shape[0], -1)[0]

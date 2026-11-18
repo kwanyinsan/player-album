@@ -141,6 +141,27 @@ Provides stage timers and duration formatting for terminal output and `logs.json
 Provides shared helpers for directory creation, JSON writing, content-hash video
 IDs, path formatting, bbox math, clamping, and vector normalization.
 
+**`saved_run.py`**
+
+Validates saved video analysis and embedding associations, loads track summaries
+or full frame records, restores saved settings, and manages the initial SQLite
+collection registry with artifact checksums and explicit provenance limitations.
+
+**`collection_cli.py`**
+
+Handles read-only inspection and reclustering into a new collection. It copies
+validated artifacts, verifies source integrity, and publishes completed output.
+
+**`album_pipeline.py`**
+
+Shares clustering, conflict resolution, identity checks, and album export between
+new video processing and saved-run processing so both workflows use the same rules.
+
+**`tests/test_saved_run.py`**
+
+Exercises saved-run validation, embedding mappings, source preservation, registry
+integrity, and failure handling without detector or ReID inference.
+
 ## Install
 
 This is the same install order used in the clean conda environment test.
@@ -175,9 +196,8 @@ Install ffmpeg before Python packages:
 conda install -c conda-forge ffmpeg -y
 ```
 
-`ffmpeg` is installed through conda because it is a system video tool, not a
-normal Python package. It gives OpenCV and the project a reliable video decode
-and encode backend for reading highlight clips and writing `tracking_debug.mp4`.
+Install `ffmpeg` through Conda as a system video tool. The pipeline reads source
+frames and writes `tracking_debug.mp4` through OpenCV's video backend.
 
 Upgrade pip tooling:
 
@@ -302,6 +322,473 @@ default is `models/yoloe-26x-seg.pt`.
 
 ## Running
 
+### Reuse An Existing Run
+
+Saved analysis can be validated and reclustered without opening input videos or
+loading YOLOE or Torchreid. These commands need NumPy; reclustering also uses
+scikit-learn and OpenCV for the existing identity checks. GPU access is not needed.
+
+Inspect a run without modifying it:
+
+```powershell
+python main.py inspect `
+  --run_dir runs/player_album_final
+```
+
+Create a separate collection using its saved tracks, crops, and embeddings:
+
+```powershell
+python main.py recluster `
+  --run_dir runs/player_album_final `
+  --output_dir runs/player_album_reloaded
+```
+
+The destination must not exist and must be outside the source run. Settings are
+loaded from the saved logs. Add `--distance_threshold 0.20` to override the
+clustering threshold. Legacy logs that omit settings produce a warning; missing
+values use the current defaults, so historical groups are not guaranteed to match.
+
+The importer checks video and track associations, frame summaries, embedding row
+mapping, finite nonzero vectors, and referenced crop files. It copies validated
+analysis and crops, exports fresh albums and a gallery, and creates `project.db`
+with video membership, track-to-embedding rows, source settings, and artifact
+SHA-256 checksums. Large per-frame records are read one video at a time. They
+remain available on disk, with an optional typed loader for later frame operations.
+
+Original input videos and weights are not required for these saved-run commands.
+Debug videos and standalone galleries are not duplicated. The new regular gallery
+uses the copied crops and can be shared together with its output folder.
+
+Existing model checksums and inference provenance cannot be reconstructed reliably
+from legacy logs. Such imports are explicitly marked unverified for future
+inference-cache compatibility, even when their saved embeddings are valid for
+reclustering. The resolved settings and validation warnings are saved in
+`logs.json` and `global/reuse_report.json`. A subsequent load verifies registered
+artifact checksums. The separate Add command below extends this foundation.
+Delete and tracked-appearance video sorting are available as described below.
+
+Failed operations return a nonzero status and leave any staging files unpublished
+for diagnosis. A complete collection is published only after export and source
+checksum verification. The source run is never updated by these commands.
+
+### Add Videos To A Collection
+
+Add processes only videos whose contents are not already registered. It reuses
+existing local tracks, crops, and embeddings, then reclusters the combined set.
+Existing per-video files and debug videos are not rewritten. Global player
+memberships and acceptance decisions can change when new evidence is added.
+
+```powershell
+python main.py add `
+  --run_dir runs/step1_test `
+  --input_dir new_highlights
+```
+
+The input folder is scanned recursively and must be outside the collection.
+Renamed copies are skipped using full SHA-256 fingerprints. Different contents
+with the same filename are new inputs. The first Add to a legacy collection
+needs the original videos at their recorded paths to establish fingerprints.
+Run from the project directory when saved paths are relative. Missing originals
+stop the migration instead of relying on filenames to guess duplicate identity.
+
+**`--dry_run`**
+
+Lists new inputs and duplicate counts without inference or album publication.
+A lock file may be created, but saved analysis remains unchanged.
+
+**`--max_videos`**
+
+Limits the number of new videos after duplicate filtering, useful for testing.
+
+**`--device`**
+
+Overrides the processing device. Other inference and quality settings are loaded
+from the saved collection rather than taken from changing command defaults.
+
+**`--save_debug_video`**
+
+Defaults to true for new videos, including collections created by reclustering.
+Pass false to disable new debug exports. Existing debug videos remain untouched.
+
+**`--yoloe_model` and `--reid_model_path`**
+
+Allow relocating weights once their fingerprints are recorded. Different
+checkpoint contents or a changed embedding recipe are rejected. Legacy runs
+without historical fingerprints retain an explicit provenance warning; the
+first Add records the current models but cannot prove which original weights
+produced the old embeddings. Legacy checkpoint path overrides are rejected.
+
+Unchanged player groups retain their IDs. Splits and merges use deterministic
+shared-track overlap matching, and new IDs are allocated without recycling
+retired numbers. Add and standalone reclustering use the same continuity rules.
+Fresh batch runs record model fingerprints and video fingerprints from the start.
+
+**`global/collection_state.json`**
+
+Records video fingerprints, current inference fingerprints, the next player ID,
+track embedding states, and operation history including identity lineage. Its checksum is registered in
+the existing SQLite registry; no external database service is required.
+
+Each local track has a state of complete, pending, retryable_error,
+no_usable_crops, or blocked_error. The state stores its embedding row, attempt
+count, failed stage, and last error. Rows marked complete must agree with the
+saved embedding index or collection validation fails.
+
+Add automatically retries pending and retryable tracks using their saved crops,
+including when every supplied video is already registered. Existing complete
+embeddings are preserved. Crops rejected by quality filtering have no_usable_crops
+status and are not retried. A track with some successful crops has a complete
+embedding and retains its crop warnings; it is not recomputed automatically.
+
+Embedding vectors must be finite, nonzero, and of the expected dimension. Crop
+and final averaged vectors are normalised before saving. Invalid feature values
+are excluded. A dimension or checkpoint mismatch blocks publication. GPU memory
+failure during ReID model initialisation leaves the analysed tracks retryable.
+Other model initialisation errors stop the operation for diagnosis.
+
+**`global/gallery_standalone.html`**
+
+Add exports a self-contained gallery with embedded images alongside the normal
+gallery. The standalone file can be sent by itself.
+
+**`.updates` and `.collection-update.json`**
+
+Each operation stages its outputs separately. Publication replaces managed global
+exports and appends new video folders while keeping previous exports in a backup.
+Old analysis is read directly from the collection during staging, avoiding a full
+copy on every Add. By default only the latest previous committed export backup
+is retained. Use --keep_backups with a positive integer to retain more. Cleanup
+only touches older committed global and player export backups. Existing video
+analysis, model files, and source videos are preserved. Failed workspaces and
+backups from older versions without a commit marker remain available for diagnosis.
+Do not modify an update workspace while processing or recovery is active.
+There is a brief publication interval during which the gallery should not be
+opened. This is recoverable publication, not a single atomic database transaction.
+
+If interrupted during publication, restore the previous coherent collection:
+
+```powershell
+python main.py recover `
+  --run_dir runs/step1_test
+```
+
+Concurrent Add operations are blocked by an operating-system lock that releases
+when the process exits. Successful videos can be published despite individual
+video failures; the command returns status 2 for partial failures and records
+errors in the logs. Failed videos remain retryable. Successful video analysis can
+be registered even if every eligible track needs an embedding retry, preserving
+the crops for the next attempt. Unfinished tracks are excluded from clustering.
+A duplicate-only operation with no pending tracks performs no inference or export.
+Run the same Add command again to retry pending tracks. A pure retry performs no
+YOLOE detection, video tracking, or crop extraction.
+
+**`collection_add.py`**
+
+Implements discovery, inherited inference settings, compatibility checks, new
+video processing, combined embeddings, validation, and updated exports.
+
+**`collection_transaction.py`**
+
+Implements collection locking, journalled publication, and rollback recovery.
+
+**`video_processing.py`**
+
+Shares per-video tracking, crop extraction, and debug rendering between ordinary
+batch processing and Add.
+
+**`player_identity.py`**
+
+Matches new groups to previous player IDs and records split and merge lineage.
+
+**`embedding_state.py`**
+
+Builds and validates persistent track processing states against saved embeddings.
+
+**`artifact_paths.py`**
+
+Resolves new staged files and existing collection artifacts with path checks.
+
+**`inference_provenance.py`**
+
+Fingerprints model weights and the embedding implementation for compatibility checks.
+
+**`tests/test_reid_embedding.py`**
+
+Tests invalid vectors, partial crop failures, failed averages, incompatible
+dimensions, and memory errors during extractor initialisation.
+
+**`tests/test_collection_add.py`**
+
+Checks duplicate handling, preserved analysis, identity continuity, compatibility
+failures, partial success, locking, and publication recovery with isolated fixtures.
+
+**`tests/run_add_smoke.py`**
+
+Runs an opt-in real-model test in a new output folder. By default it reuses 20 saved videos,
+analyses five held-out videos, checks source and cache preservation, repeats Add to
+verify duplicate skipping, and compares grouping against reclustering the combined
+cache. It is not an identity-accuracy benchmark or a fresh inference comparison
+of every source video.
+
+```powershell
+python tests/run_add_smoke.py `
+  --source_run runs/step1_test `
+  --output_dir runs/new_add_smoke `
+  --baseline_videos 20 `
+  --new_videos 5
+```
+
+Run the focused regression tests:
+
+```powershell
+python -m unittest discover -s tests -v
+```
+
+### Exclude Videos From A Collection
+
+Delete marks selected videos inactive and rebuilds albums from the remaining
+saved embeddings. Source videos, model files, local tracks, crops, and debug
+videos remain available. This operation uses CPU clustering and crop appearance
+checks; YOLOE and Torchreid inference are not run. Original input videos and model
+weights do not need to be available for Delete.
+
+Find internal video IDs and filenames in global/video_index.json, then preview:
+
+```powershell
+python main.py delete `
+  --run_dir runs/step1_test `
+  --video_ids V_653D16 V_2FBFA8 `
+  --dry_run
+```
+
+Run the update by omitting --dry_run:
+
+```powershell
+python main.py delete `
+  --run_dir runs/step1_test `
+  --video_ids V_653D16 V_2FBFA8
+```
+
+**`--video_ids`**
+
+Accepts one or more internal video IDs. Every ID is validated before publication.
+An unknown ID rejects the entire request. Duplicate IDs are deduplicated, and
+already excluded IDs are ignored. Repeating a completed Delete makes no changes.
+
+**`--dry_run`**
+
+Shows newly excluded videos, affected local-track count, and affected player IDs
+without inference, migration, or export. The collection lock file may be created.
+
+**`--keep_backups`**
+
+Uses the same committed-export backup retention as Add, defaulting to one previous
+backup. Delete stages its database and global exports and uses the existing
+publication journal. The recover command handles interrupted publication.
+
+**Complete cache and active view**
+
+The complete cache contains all registered video metadata and every successful
+track embedding, including excluded videos. The active view contains only videos
+participating in clustering. Existing local_track files in the global output
+represent the active view. Clustering, album export, and video_index.json use
+active data exclusively. An empty active collection is supported.
+
+**`global/track_cache_embeddings.npy`**
+
+Stores all successful cached embeddings. Excluding videos preserves these vectors
+and their cache rows. Add appends newly extracted embeddings to this complete cache.
+
+**`global/track_cache_index.json`**
+
+Maps cache_row to local track, source video, crops, and embedding metadata. Active
+embedding_row values are separate and can change when active arrays are rebuilt.
+
+**`global/collection_state.json`**
+
+Stores video_membership flags, cache format version, per-track processing states,
+and operation history. A complete track from an excluded video retains its
+cache_row and complete status, while its active embedding_row is null. Exclusion
+is a video membership decision, not an extraction failure.
+
+**`project.db` schema version 2**
+
+Records every registered video with its active flag, and every track with separate
+cache_row and embedding_row mappings. The loader supports version 1 registries.
+Successful collection updates stage a version 2 registry and bootstrap complete
+cache files from saved embeddings, without repeating inference. Validation checks
+active vectors against cached vectors and verifies artifacts for excluded videos.
+
+**Add and recluster after Delete**
+
+Add recognises excluded video fingerprints and reports them as inactive duplicates.
+It does not reactivate them, and it retries unfinished embeddings only for active
+tracks. Standalone reclustering preserves exclusions and copies the complete cache
+to its new destination. Explicit restoration can be added later using the cache.
+
+Remaining groups use the existing player-ID continuity rules. Groups without
+remaining tracks disappear from current albums; their IDs are not recycled.
+Clustering and quality decisions may change after evidence is excluded.
+
+**Logs and inspection**
+
+number_of_videos and number_of_local_tracks describe active data.
+number_of_registered_videos and number_of_excluded_videos describe membership.
+Inspection also reports cached embeddings. Delete logs requested and newly
+excluded IDs, active counts before and after, retired player IDs, stage timing,
+and inference_executed set to false.
+
+**`collection_cache.py`**
+
+Defines the complete analysis cache, creates active views, writes both embedding
+datasets, and maps cached and active rows into persistent processing states.
+
+**`collection_delete.py`**
+
+Implements exclusion selection, staged reclustering, export, validation, and
+recoverable publication.
+
+**`tests/test_collection_delete.py`**
+
+Tests exclusion, reindexing, complete-cache preservation, empty collections,
+idempotence, migration, transaction recovery, and Add and recluster integration.
+
+**`tests/run_delete_smoke.py`**
+
+Creates a separate copy of a real result, excludes selected videos, verifies all
+retained video-analysis files and embedding values, checks duplicate Add and
+reclustering behaviour, and compares grouping with independently filtered cached
+embeddings. Inference functions are patched to fail if invoked.
+
+```powershell
+python tests/run_delete_smoke.py `
+  --source_run runs/add_reliability_test/collection `
+  --output_dir runs/new_delete_test `
+  --delete_videos 3
+```
+
+### Sort A Player's Videos By Appearance
+
+Player metadata and both galleries rank each player's active videos by the
+percentage of frames containing that player's assigned local tracks. The
+calculation merges observed frame ranges across tracks from the same video.
+Overlaps count once and tracking gaps do not count. For example, tracks covering
+frames 0 through 99 and 80 through 179 contribute 180 unique frames; in a
+300-frame video, appearance coverage is 60 percent.
+
+Fresh runs, Add, Delete, and recluster generate these rankings automatically.
+Refresh an existing result with:
+
+```powershell
+python main.py sort `
+  --run_dir runs/step1_test
+```
+
+Sort reads saved frame observations and refreshes metadata and galleries without
+YOLOE, Torchreid, video decoding, or reclustering. Existing player IDs, local-track
+assignments, quality scores, acceptance decisions, embeddings, and exclusions are
+preserved. Source videos and model weights do not need to be available. Use
+--dry_run to preview the number of rankings and unavailable measurements. The
+--keep_backups option uses the same retention policy as Add and Delete.
+
+**`video_rankings`**
+
+Each player entry in global/player_groups.json and each exported album's
+metadata.json contains a ranked list. Its fields include rank, video_id,
+original_filename, source_path, visible_frames, total_frames,
+appearance_percentage, frame_count_source, coverage_status, and local_tracks.
+The existing videos and video_ids string arrays follow the same order. Videos
+with identical filenames remain separate entries identified by their video IDs.
+
+**Coverage and ordering**
+
+The denominator is the saved video frame count for legacy analysis, labelled
+metadata. Fresh tracking also records processed_frame_count and analysis_complete.
+Completed processing counts are cross-checked against positive metadata counts;
+a disagreement makes coverage unavailable. A completed processing count can supply
+the denominator when metadata has no positive frame count. The recorded source
+is processed for these new measurements.
+
+Missing totals, missing observations, incomplete processing, and out-of-range
+frame indices produce a null percentage with an explicit coverage_status reason.
+Unknown measurements sort last and do not change album acceptance. Valid entries
+sort by exact coverage ratio descending, then visible-frame count descending,
+then video ID. Display rounding never controls the order.
+
+The percentage measures recognised tracking coverage. Detection misses and
+identity mistakes can affect it; it is not a ground-truth visibility measurement.
+The number of saved crop images does not affect coverage.
+
+**Gallery**
+
+Each player has ranked video sections showing source filename, percentage, and
+observed frame count. Local tracks from that video appear together. The normal
+and standalone galleries use the same ordering and preserve complete crop images.
+
+**`observed_frame_ranges`**
+
+Track summaries retain compact inclusive ranges instead of mask arrays. The saved
+loader derives these ranges from existing frame records without rewriting old
+tracking JSON. Fresh analysis saves the ranges and processed frame counts.
+
+**`player_video_sorting.py`**
+
+Compacts and merges observed ranges, validates coverage measurements, and generates
+deterministic per-player video rankings.
+
+**`collection_sort.py`**
+
+Implements the standalone Sort command. It validates player assignments, stages
+small global and album exports, and uses the collection publication journal.
+Existing large video-analysis files are read in place. The recover command handles
+an interrupted publication. Logs include video_sorting with unavailable-coverage
+reasons and stage timing.
+
+**`tests/test_player_video_sorting.py` and `tests/test_collection_sort.py`**
+
+Test overlap, gaps, exact ratios, invalid counts, metadata disagreements,
+preserved identity decisions, gallery ordering, Add and Delete integration,
+standalone reclustering, and rollback.
+
+**`tests/run_sort_smoke.py`**
+
+Creates a separate copy of a real result and independently computes frame unions
+using sets of raw frame indices. It checks every ranking, both galleries,
+preserved embeddings and images, unchanged identity decisions and exclusions,
+and deterministic repeated Sort. Inference and clustering functions are patched
+to fail if invoked.
+
+```powershell
+python tests/run_sort_smoke.py `
+  --source_run runs/delete_feature_test/collection `
+  --output_dir runs/new_sort_test
+```
+
+**`tests/run_workflow_smoke.py`**
+
+Runs the complete workflow in one new collection using videos already in the
+project. By default it selects a deterministic sample of 25 distinct videos,
+copies 20 into an initial dataset and five into an additional dataset, and runs
+fresh inference, Add, Delete, and Sort with the configured default models.
+It checks duplicate operations, retained embeddings and video analysis, video
+rankings against raw frame sets, and a real interrupted publication followed by
+recovery. Original dataset files and model files are checked for changes.
+
+```powershell
+python tests/run_workflow_smoke.py `
+  --input_dir highlights `
+  --output_dir runs/new_complete_workflow_test
+```
+
+The destination must be a new folder under runs. It contains dataset copies,
+dataset_manifest.json, the collection, stage_logs, and verification.json. The
+report records each command, return code, timing, and validation outcome. Expected
+nonzero exits during the deliberate interruption test are recorded separately.
+Use --initial_videos, --add_videos, --delete_videos, and --seed to change the test
+selection. This is a functional workflow test, not a labelled identity benchmark.
+
+### Process Input Videos
+
 Minimal quality-first run:
 
 ```powershell
@@ -380,8 +867,8 @@ in `config.py`, so the normal run command can stay short.
 
 **`--input_dir`**
 
-Default: `highlights`. Folder containing input videos. Videos are scanned
-recursively.
+Default: `highlights`. Pass one parent folder. The scanner includes supported
+videos in every nested folder under that parent.
 
 **`--output_dir`**
 
@@ -595,6 +1082,11 @@ Default: `false`. If true, show review and rejected groups in `gallery.html`.
 
 Input videos stay untouched. The code does not delete, move, rename, modify, or
 overwrite input videos or model weights.
+
+A fresh run and Add each take one `--input_dir` per command. For example,
+`highlights` can contain separate `session_a`, `session_b`, and `session_c`
+folders, and one run will scan all three. For folders with separate roots, start
+with one folder and use Add for each additional root against the same collection.
 
 Supported video extensions:
 

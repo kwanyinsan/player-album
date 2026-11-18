@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 import time
 import traceback
 from dataclasses import asdict
@@ -8,18 +9,21 @@ from typing import Any, Callable, TypeVar
 
 import numpy as np
 
-from clustering import cluster_embeddings, player_ids_for_labels, save_similarity_matrix_csv
+from album_pipeline import group_and_export
+from embedding_state import track_states
+from collection_cache import CollectionCache, write_cache_outputs
+from inference_provenance import model_signature
+from clustering import save_similarity_matrix_csv
 from config import PipelineConfig, parse_config, validate_config
-from conflict_rules import conflicts_by_player_id, find_cluster_conflicts, split_conflicting_clusters
-from crop_extraction import extract_crops_for_video
 from gallery_export import export_gallery_html
-from identity_validation import identity_stats_by_player_id, split_identity_inconsistent_clusters
-from json_export import build_video_index, export_player_albums, write_global_indexes, write_local_tracks_json
-from player_tracking import LocalTrack, process_video_tracking, render_tracking_debug_video
+from json_export import build_video_index, write_global_indexes, write_local_tracks_json
+from player_tracking import LocalTrack
 from reid_embedding import EmbeddingOutput, extract_track_embeddings
 from timing_utils import TimerRegistry, format_duration
 from utils import ensure_dir, write_json
+from saved_run import checksum
 from video_io import VideoInfo, scan_videos
+from video_processing import analyze_video
 from yoloe_player_detection import YOLOEPlayerDetector
 
 
@@ -27,7 +31,17 @@ T = TypeVar("T")
 
 
 def main(argv: list[str] | None = None) -> int:
+    arguments = sys.argv[1:] if argv is None else argv
+    if arguments and arguments[0] in {"inspect", "recluster", "add", "recover", "delete", "sort"}:
+        from collection_cli import main as collection_main
+
+        return collection_main(arguments)
     config = parse_config(argv)
+    if any((config.output_dir / name).exists() for name in (
+        "project.db", ".collection-update.json", ".collection.lock", "global/collection_state.json",
+    )):
+        print("This output is a saved collection. Use add, or select a new output folder.")
+        return 2
     timers = TimerRegistry()
     output_root = ensure_dir(config.output_dir)
     videos_root = ensure_dir(output_root / "videos")
@@ -44,12 +58,15 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         validate_config(config)
+        if config.reid.reid_model_path:
+            logs["inference_signature"] = model_signature(config)
         videos, elapsed = _timed(
             timers,
             "scan_videos",
             lambda: scan_videos(config.input_dir, config.video_extensions, config.max_videos),
         )
         print(f"Loaded {len(videos)} video(s) in {format_duration(elapsed)}")
+        video_fingerprints = {video.video_id: checksum(video.path) for video in videos}
     except Exception as exc:
         errors.append(_error_payload("setup", exc))
         logs["errors"] = errors
@@ -68,68 +85,24 @@ def main(argv: list[str] | None = None) -> int:
         video_started = time.perf_counter()
 
         try:
-            tracks, elapsed = _timed(
-                timers,
-                "yoloe_detection_tracking",
-                lambda video=video: process_video_tracking(
-                    video,
-                    detector,
-                    config.filtering,
-                    config.crops.min_crop_height,
-                ),
-                video_id=video.video_id,
-                filename=video.filename,
-            )
-            print(f"YOLOE detection/tracking time: {format_duration(elapsed)}")
+            with timers.timed("video_analysis", video_id=video.video_id, filename=video.filename):
+                tracks, stage_times = analyze_video(
+                    video, detector, config, output_root,
+                    on_optional_error=lambda stage, exc: errors.append(_error_payload(stage, exc, video)),
+                )
+                if checksum(video.path) != video_fingerprints[video.video_id]:
+                    raise RuntimeError("Input video changed during analysis")
+            for stage, elapsed in stage_times.items():
+                print(f"{stage}: {format_duration(elapsed)}")
             if detector.prompt_warning and not prompt_warning_logged:
                 errors.append({"stage": "yoloe_prompt", "error": detector.prompt_warning})
                 print(f"Prompt warning: {detector.prompt_warning}")
                 prompt_warning_logged = True
         except Exception as exc:
-            errors.append(_error_payload("yoloe_detection_tracking", exc, video))
+            errors.append(_error_payload("video_analysis", exc, video))
             write_local_tracks_json(video, tracks, video_output_dir / "local_tracks.json", error=str(exc))
-            print(f"Video failed during YOLOE tracking: {exc}")
+            print(f"Video analysis failed: {exc}")
             continue
-
-        try:
-            _, elapsed = _timed(
-                timers,
-                "crop_extraction",
-                lambda video=video, tracks=tracks: extract_crops_for_video(
-                    video,
-                    tracks,
-                    video_output_dir,
-                    output_root,
-                    config.crops,
-                ),
-                video_id=video.video_id,
-                filename=video.filename,
-            )
-            print(f"Crop extraction time: {format_duration(elapsed)}")
-        except Exception as exc:
-            errors.append(_error_payload("crop_extraction", exc, video))
-            print(f"Crop extraction failed for {video.filename}: {exc}")
-
-        if config.export.save_debug_video:
-            try:
-                _, elapsed = _timed(
-                    timers,
-                    "debug_video_rendering",
-                    lambda video=video, tracks=tracks: render_tracking_debug_video(
-                        video,
-                        tracks,
-                        video_output_dir / "tracking_debug.mp4",
-                        config.detector.prompt,
-                    ),
-                    video_id=video.video_id,
-                    filename=video.filename,
-                )
-                print(f"Debug video rendering time: {format_duration(elapsed)}")
-            except Exception as exc:
-                errors.append(_error_payload("debug_video_rendering", exc, video))
-                print(f"Debug video rendering failed for {video.filename}: {exc}")
-
-        write_local_tracks_json(video, tracks, video_output_dir / "local_tracks.json")
         all_tracks.extend(tracks)
         print(f"Total video time: {format_duration(time.perf_counter() - video_started)}")
 
@@ -159,58 +132,31 @@ def main(argv: list[str] | None = None) -> int:
 
     player_groups: list[dict[str, Any]] = []
     try:
-        cluster_result, elapsed = _timed(
+        grouped, elapsed = _timed(
             timers,
             "clustering",
-            lambda: cluster_embeddings(
-                embeddings,
-                config.clustering.cluster_method,
-                config.clustering.distance_threshold,
+            lambda: group_and_export(
+                output_root, records, embeddings, tracks_by_id, config.clustering, config.export,
+                video_metadata={video.video_id: video for video in videos},
             ),
         )
-        print(f"Clustering time: {format_duration(elapsed)}")
-        local_track_ids = [record.local_player_id for record in records]
-        save_similarity_matrix_csv(global_dir / "similarity_matrix.csv", local_track_ids, cluster_result.similarity_matrix)
-        resolved_labels, conflict_resolution = split_conflicting_clusters(
-            cluster_result.labels,
-            records,
-            cluster_result.similarity_matrix,
-        )
+        print(f"Clustering and album export time: {format_duration(elapsed)}")
+        player_groups, reports = grouped
+        logs["video_sorting"] = reports["video_sorting"]
+        conflict_resolution = reports["cluster_conflict_resolution"]
+        identity_resolution = reports["identity_cluster_resolution"]
         if conflict_resolution["split_clusters"]:
             logs["cluster_conflict_resolution"] = conflict_resolution
             print(
                 "Same-video conflict resolution: "
                 f"split {len(conflict_resolution['split_clusters'])} cluster(s)"
             )
-        resolved_labels, identity_resolution = split_identity_inconsistent_clusters(
-            resolved_labels,
-            records,
-            output_root,
-            cluster_result.similarity_matrix,
-            config.clustering,
-        )
         if identity_resolution.get("split_clusters"):
             logs["identity_cluster_resolution"] = identity_resolution
             print(
                 "Identity consistency resolution: "
                 f"split {len(identity_resolution['split_clusters'])} cluster(s)"
             )
-        player_id_by_label = player_ids_for_labels(resolved_labels)
-        player_ids_by_index = [player_id_by_label[label] for label in resolved_labels]
-        conflicts_by_label = find_cluster_conflicts(resolved_labels, records)
-        conflicts = conflicts_by_player_id(conflicts_by_label, player_id_by_label)
-        identity_by_player = identity_stats_by_player_id(identity_resolution, player_id_by_label)
-        player_groups = export_player_albums(
-            output_root,
-            records,
-            tracks_by_id,
-            player_ids_by_index,
-            cluster_result.similarity_matrix,
-            conflicts,
-            config.export,
-            config.clustering,
-            identity_by_player,
-        )
     except Exception as exc:
         errors.append(_error_payload("clustering", exc))
         save_similarity_matrix_csv(global_dir / "similarity_matrix.csv", [], np.zeros((0, 0), dtype=np.float32))
@@ -253,11 +199,27 @@ def main(argv: list[str] | None = None) -> int:
             "errors": errors,
         }
     )
+    signature_unchanged = (not logs.get("inference_signature")
+                           or model_signature(config) == logs["inference_signature"])
+    if not signature_unchanged:
+        errors.append({"stage": "provenance", "error": "Model files changed during processing"})
+        logs.pop("inference_signature", None)
+    state = {
+        "version": 1, "video_fingerprints": video_fingerprints,
+        "inference_signature": logs.get("inference_signature"),
+        "legacy_provenance_unverified": not bool(logs.get("inference_signature")),
+        "embedding_status": track_states(tracks_by_id, records, embedding_output.track_statuses),
+        "next_player_number": max((int(g["player_id"][1:]) for g in player_groups), default=0) + 1,
+        "operations": [],
+    }
+    state = write_cache_outputs(output_root, CollectionCache(videos, tracks_by_id, records, embeddings,
+                                {v.video_id for v in videos}), state)
+    write_json(global_dir / "collection_state.json", state)
     write_json(output_root / "logs.json", logs)
     total_time = sum(event.elapsed_sec for event in timers.events if event.name != "scan_videos")
     print(f"Total folder time: {format_duration(total_time)}")
     print(f"Output: {output_root}")
-    return 0
+    return 2 if errors else 0
 
 
 def _base_logs(config: PipelineConfig) -> dict[str, Any]:

@@ -124,7 +124,8 @@ class PipelineConfig:
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Build player and person albums from tracked highlight videos."
+        description="Build player and person albums from tracked highlight videos.",
+        epilog="Collections: python main.py inspect --help, recluster --help, add --help, delete --help, or sort --help",
     )
 
     parser.add_argument("--input_dir", default="highlights", help="Folder of input videos.")

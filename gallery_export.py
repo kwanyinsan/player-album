@@ -34,11 +34,19 @@ def export_gallery_html(
         ".rep{width:132px;height:180px;object-fit:contain;border-radius:6px;border:1px solid #ccd5df;background:#fff}",
         ".review{color:#a33;font-weight:700}",
         ".status{font-weight:700;text-transform:uppercase}",
-        ".tracks{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}",
+        ".tracks{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}",
         ".track{border-top:1px solid #e3e8ef;padding-top:10px}",
         ".thumbs{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}",
         ".thumbs img{width:104px;height:140px;object-fit:contain;border-radius:4px;border:1px solid #d8dee7;background:#fff}",
         ".meta{font-size:13px;color:#5e6a78;line-height:1.4}",
+        ".top>div{min-width:0;overflow-wrap:anywhere}",
+        ".rep{flex-shrink:0}",
+        ".video{border-top:1px solid #d9e0e8;padding-top:12px;margin-top:14px;min-width:0}",
+        ".video-heading{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}",
+        ".video-heading h3{font-size:16px;margin:0;overflow-wrap:anywhere;min-width:0}",
+        ".coverage{font-size:14px;font-variant-numeric:tabular-nums}",
+        ".track{min-width:0;overflow-wrap:anywhere}",
+        "@media(max-width:400px){main{padding:12px}.top{align-items:flex-start;flex-wrap:wrap}.tracks{grid-template-columns:minmax(0,1fr)}}",
         "</style>",
         "</head>",
         "<body>",
@@ -68,8 +76,8 @@ def export_gallery_html(
         color_score = identity.get("color_mean")
         color_text = f"{float(color_score):.3f}" if isinstance(color_score, (int, float)) else "n/a"
         review_text = '<span class="review">Conflict review</span>' if review else "No conflict"
-        videos = ", ".join(html.escape(str(video)) for video in group.get("videos", []))
-        parts.append(f'<section class="player {export_status}">')
+        videos = len(group.get("video_ids", group.get("videos", [])))
+        parts.append(f'<section class="player {export_status}" data-player-id="{player_id}">')
         parts.append('<div class="top">')
         if representative:
             parts.append(f'<img class="rep" src="{representative}" alt="{player_id} representative">')
@@ -82,18 +90,35 @@ def export_gallery_html(
             f'Cluster size: {len(group.get("local_tracks", []))}<br>Videos: {videos}</div></div>'
         )
         parts.append("</div>")
-        parts.append('<div class="tracks">')
-        for local_track_id in group.get("local_tracks", []):
-            track = tracks_by_id.get(local_track_id)
-            if track is None:
-                continue
-            parts.append('<div class="track">')
-            parts.append(f'<div class="meta"><strong>{html.escape(local_track_id)}</strong><br>{html.escape(track.source_video_name)}</div>')
-            parts.append('<div class="thumbs">')
-            for crop_path in track.crop_paths[:8]:
-                parts.append(f'<img src="{_gallery_src(crop_path)}" alt="{html.escape(local_track_id)} crop">')
-            parts.append("</div></div>")
-        parts.append("</div></section>")
+        rankings = group.get("video_rankings")
+        if rankings is None:
+            rankings = [{"local_tracks": group.get("local_tracks", [])}]
+        for entry in rankings:
+            video_id = html.escape(str(entry.get("video_id", "")), quote=True)
+            parts.append(f'<section class="video" data-video-id="{video_id}">')
+            if "rank" in entry:
+                filename = html.escape(str(entry["original_filename"]))
+                percentage = entry.get("appearance_percentage")
+                if percentage is None:
+                    reason = html.escape(str(entry["coverage_status"]).replace("_", " "))
+                    coverage = f"Coverage unavailable: {reason}"
+                else:
+                    coverage = f"{percentage:.1f}% ({entry['visible_frames']} of {entry['total_frames']} frames)"
+                parts.append(f'<div class="video-heading"><h3>{entry["rank"]}. {filename}</h3>'
+                             f'<span class="coverage">{coverage}</span></div>')
+            parts.append('<div class="tracks">')
+            for local_track_id in entry["local_tracks"]:
+                track = tracks_by_id.get(local_track_id)
+                if track is None:
+                    continue
+                parts.append('<div class="track">')
+                parts.append(f'<div class="meta"><strong>{html.escape(local_track_id)}</strong><br>{html.escape(track.source_video_name)}</div>')
+                parts.append('<div class="thumbs">')
+                for crop_path in track.crop_paths[:8]:
+                    parts.append(f'<img src="{_gallery_src(crop_path)}" alt="{html.escape(local_track_id)} crop">')
+                parts.append("</div></div>")
+            parts.append("</div></section>")
+        parts.append("</section>")
 
     parts.extend(["</main>", "</body>", "</html>"])
     gallery_path.write_text("\n".join(parts), encoding="utf-8")
@@ -104,3 +129,33 @@ def _gallery_src(root_relative_path: object) -> str:
     if not root_relative_path:
         return ""
     return "../" + html.escape(str(root_relative_path).replace("\\", "/"), quote=True)
+
+
+def export_standalone_gallery(output_root: Path, source_root: Path | None = None) -> Path:
+    """Validate gallery references and embed local images into a shareable HTML file."""
+    import base64
+    import mimetypes
+    from html.parser import HTMLParser
+    from artifact_paths import artifact_path
+
+    gallery = output_root / "global/gallery.html"
+    sources = set()
+
+    class Images(HTMLParser):
+        def handle_starttag(self, tag, attrs):
+            if tag == "img":
+                sources.add(dict(attrs).get("src", ""))
+
+    content = gallery.read_text(encoding="utf-8")
+    Images().feed(content)
+    for source in sources:
+        path = (gallery.parent / source).resolve()
+        if not path.is_relative_to(output_root.resolve()):
+            raise ValueError(f"Invalid gallery image: {source}")
+        path = artifact_path(output_root, path.relative_to(output_root.resolve()).as_posix(), source_root)
+        mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+        content = content.replace(f'src="{html.escape(source, quote=True)}"', f'src="data:{mime};base64,{encoded}"')
+    destination = gallery.with_name("gallery_standalone.html")
+    destination.write_text(content, encoding="utf-8")
+    return destination

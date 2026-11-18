@@ -17,6 +17,8 @@ class VideoInfo:
     fps: float
     frame_count: int
     duration_sec: float
+    processed_frame_count: int | None = None
+    analysis_complete: bool | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -28,6 +30,8 @@ class VideoInfo:
             "fps": self.fps,
             "frame_count": self.frame_count,
             "duration_sec": self.duration_sec,
+            "processed_frame_count": self.processed_frame_count,
+            "analysis_complete": self.analysis_complete,
         }
 
 

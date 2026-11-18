@@ -7,11 +7,13 @@ from typing import Any
 import numpy as np
 
 from album_quality import score_album_group
+from artifact_paths import artifact_path
 from config import ClusteringConfig, ExportConfig
 from player_tracking import LocalTrack
 from reid_embedding import EmbeddingRecord
 from utils import ensure_dir, path_to_posix, write_json
 from video_io import VideoInfo
+from player_video_sorting import ranking_fields
 
 
 def write_local_tracks_json(video_info: VideoInfo, tracks: list[LocalTrack], path: Path, error: str | None = None) -> None:
@@ -35,6 +37,7 @@ def export_player_albums(
     clustering_config: ClusteringConfig,
     identity_by_player: dict[str, dict[str, Any]] | None = None,
     source_root: Path | None = None,
+    video_metadata: dict[str, VideoInfo] | None = None,
 ) -> list[dict[str, Any]]:
     players_root = ensure_dir(output_root / "players")
     review_root = output_root / "review"
@@ -61,8 +64,7 @@ def export_player_albums(
         )
         export_status = str(quality["export_status"])
         local_track_ids = [records[index].local_player_id for index in indices]
-        videos = sorted({records[index].source_video_name for index in indices})
-        video_ids = sorted({records[index].video_id for index in indices})
+        ranked = ranking_fields(local_track_ids, tracks_by_id, video_metadata or {})
         copied_best_paths = []
 
         representative_crop = None
@@ -79,7 +81,7 @@ def export_player_albums(
                 record = records[index]
                 if not record.representative_crop:
                     continue
-                source_path = (source_root or output_root) / record.representative_crop
+                source_path = artifact_path(output_root, record.representative_crop, source_root)
                 if not source_path.exists():
                     continue
                 target_path = player_dir / f"{record.local_player_id}_best.jpg"
@@ -97,8 +99,6 @@ def export_player_albums(
         metadata = {
             "player_id": player_id,
             "local_tracks": local_track_ids,
-            "videos": videos,
-            "video_ids": video_ids,
             "representative_crop": representative_crop,
             "best_crops": copied_best_paths,
             "average_similarity_score": average_similarity,
@@ -106,6 +106,7 @@ def export_player_albums(
             "conflicts": conflicts_by_player.get(player_id, []),
             "identity_validation": (identity_by_player or {}).get(player_id, {}),
             **quality,
+            **ranked,
         }
         if player_dir is not None:
             write_json(player_dir / "metadata.json", metadata)
@@ -114,8 +115,6 @@ def export_player_albums(
             {
                 "player_id": player_id,
                 "representative_crop": representative_crop,
-                "videos": videos,
-                "video_ids": video_ids,
                 "local_tracks": local_track_ids,
                 "cluster_size": len(local_track_ids),
                 "average_similarity_score": average_similarity,
@@ -123,6 +122,7 @@ def export_player_albums(
                 "conflicts": conflicts_by_player.get(player_id, []),
                 "identity_validation": (identity_by_player or {}).get(player_id, {}),
                 **quality,
+                **ranked,
             }
         )
     return player_groups
@@ -153,6 +153,8 @@ def build_video_index(
             "fps": video.fps,
             "frame_count": video.frame_count,
             "duration_sec": video.duration_sec,
+            "processed_frame_count": video.processed_frame_count,
+            "analysis_complete": video.analysis_complete,
             "players": sorted(players_by_video_id.get(video.video_id, set())),
         }
         for video in videos

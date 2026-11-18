@@ -1,6 +1,6 @@
 # Install CUDA-specific PyTorch first if this file is used on a GPU machine.
-# Example for CUDA 12.1:
-# python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+# Tested on Python 3.10 with torch 2.5.1 and torchvision 0.20.1 (CUDA 12.1).
+# Keep the PyTorch and torchvision builds matched. See README.md for setup.
 #
 # Install ffmpeg with conda before this file:
 # conda install -c conda-forge ffmpeg -y
@@ -8,7 +8,8 @@
 torch>=2.5.1
 torchvision>=0.20.1
 torchaudio>=2.5.1
-ultralytics>=8.3.0
+# Version used for the YOLOE-26x end-to-end workflow test.
+ultralytics==8.4.41
 git+https://github.com/ultralytics/CLIP.git
 lap>=0.5.12
 opencv-python-headless>=4.8.0
